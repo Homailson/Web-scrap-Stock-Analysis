@@ -1,0 +1,29 @@
+body {    
+    font-family: sans-serif;
+    background-color: rgb(227, 231, 211);
+}
+
+.app_container{
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100vh;
+}
+
+.graph_container{
+    flex: 1;
+    margin: 30px;
+    padding: 20px;
+}
+
+.news_container{
+    flex: 1;
+    margin: 5px;
+    padding: 5px;
+}
+
+.dropdown_menu {
+    width: 40%;
+    margin-left: 0px;
+    padding-bottom: 30px;
+}
