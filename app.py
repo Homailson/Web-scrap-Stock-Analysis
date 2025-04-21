@@ -1,151 +1,131 @@
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 from dash import Dash, html, dcc, Input, Output
 import plotly.express as px
-import yfinance as yf 
+import yfinance as yf
 from datetime import datetime, timedelta
 
-app=Dash(__name__,title='Dash Homailson')
+# === CONFIGURAÇÕES ===
+app = Dash(__name__, title='Dash Homailson')
 
-# Web Scrapping Start
-def get_company_hrefs_from_search(url_string, search_list):
-    all_news_hrefs_companies_dict = []
-    for search_parameter in search_list:
-        response=requests.get(url_string+search_parameter)
-        content=response.content
-        site=BeautifulSoup(content, 'html.parser')
-        h2_element=site.findAll('h2', attrs={'class':'boxarticle-infos-title'})        
-        hrefs=list(map(lambda e: {"company":"PETR4" if search_parameter=="petrobras" else search_parameter,
-                                  "href":e.find('a')['href']},
-                                  [element for element in h2_element]))
-        all_news_hrefs_companies_dict.extend(hrefs)
-
-    return all_news_hrefs_companies_dict
-
-
-def find_meta_content(news_element, attr_key, attr_value):
-    meta_data=news_element.find('meta', attrs={attr_key:attr_value})
-    return meta_data['content'] if meta_data else "null"
-
-
-def get_news_data_from_hrefs(hrefs_companies_dict):
-    all_news_data = []
-    for item in hrefs_companies_dict:
-        response=requests.get(item["href"])
-        content=response.content
-        full_news=BeautifulSoup(content,'html.parser')
-        news_head=full_news.find('head')        
-        tags_meta=news_head.find_all('meta', {'property': 'article:tag'})
-        news_data = {            
-            "company":item["company"],
-            "href":item["href"],            
-            "title":find_meta_content(news_head,'property','og:title'),
-            "author":find_meta_content(news_head,'name','twitter:data1'),
-            "section":find_meta_content(news_head, 'property','article:section'),
-            "tags":[tag.get('content') for tag in tags_meta if len(tags_meta)!=0],
-            "published_time":find_meta_content(news_head,'property','article:published_time'),
-            "description":find_meta_content(news_head, 'name','twitter:description'),
-            "lecture_time":find_meta_content(news_head, 'name','twitter:data2')
-        }
-        all_news_data.append(news_data)
-    return all_news_data
-
-def get_news_data_parallel(hrefs_companies_dict):
-    s_batch=8
-    all_batches=[hrefs_companies_dict[i:i + s_batch] for i in range(0, len(hrefs_companies_dict), s_batch)]
-    all_news_data = []
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        results = list(executor.map(get_news_data_from_hrefs, all_batches))
-    for result in results:
-        all_news_data.extend(result)
-    return all_news_data
-
-companies_and_symbols = {
-    "petrobras":"PETR4.SA",
-    "C%26A":"CEAB3.SA",
-    "WEG":"WEGE3.SA"
+SEARCH_TERMS = ["petrobras", "C%26A", "WEG"]
+COMPANY_SYMBOLS = {
+    "PETR4": "PETR4.SA",
+    "C%26A": "CEAB3.SA",
+    "WEG": "WEGE3.SA"
 }
+BASE_URL = "https://braziljournal.com/?s="
+START_DATE = datetime.now() - timedelta(days=365)
+END_DATE = datetime.now()
 
-hrefs_dict = get_company_hrefs_from_search("https://braziljournal.com/?s=",companies_and_symbols.keys())
-all_news_info = get_news_data_parallel(hrefs_dict)
-all_news_info_DF = pd.DataFrame.from_dict(all_news_info, orient='columns')
-print(all_news_info_DF)
-# Web Scrapping End
+# === WEB SCRAPING ===
+def buscar_links_de_noticias(termos):
+    """Busca links das páginas de notícias a partir dos termos de busca."""
+    hrefs = []
+    for termo in termos:
+        soup = BeautifulSoup(requests.get(BASE_URL + termo).content, 'html.parser')
+        links = soup.find_all('h2', class_='boxarticle-infos-title')
+        empresa = "PETR4" if termo == "petrobras" else termo
+        hrefs.extend({"company": empresa, "href": tag.find('a')['href']} for tag in links)
+    return hrefs
 
+def extrair_conteudo(head, atributo, valor):
+    meta = head.find('meta', attrs={atributo: valor})
+    return meta['content'] if meta else None
 
-#Stock Data Getting Start
-start_date=(datetime.now() - timedelta(days=365))
-end_date=datetime.now()
+def extrair_dados_da_pagina(info):
+    soup = BeautifulSoup(requests.get(info["href"]).content, 'html.parser')
+    head = soup.head
+    tags = [tag['content'] for tag in head.find_all('meta', {'property': 'article:tag'})]
+    return {
+        "company": info["company"],
+        "href": info["href"],
+        "title": extrair_conteudo(head, 'property', 'og:title'),
+        "author": extrair_conteudo(head, 'name', 'twitter:data1'),
+        "section": extrair_conteudo(head, 'property', 'article:section'),
+        "tags": tags,
+        "published_time": extrair_conteudo(head, 'property', 'article:published_time'),
+        "description": extrair_conteudo(head, 'name', 'twitter:description'),
+        "lecture_time": extrair_conteudo(head, 'name', 'twitter:data2')
+    }
 
+def extrair_noticias_em_paralelo(hrefs):
+    """Usa threads para extrair várias páginas ao mesmo tempo."""
+    with ThreadPoolExecutor() as executor:
+        return list(executor.map(extrair_dados_da_pagina, hrefs))
 
-def get_stock_data(company_symbol_dict):
-    all_data=pd.DataFrame()
-    for name, symbol in company_symbol_dict.items():
-        data = yf.download(symbol, start=start_date, end=end_date, progress=False)        
-        data["company"]="PETR4" if name=="petrobras" else name
-        all_data = pd.concat([all_data, data])
-    return all_data
+# === YFINANCE ===
+def obter_dados_acoes(simbolos):
+    """Busca dados históricos das ações das empresas fornecidas."""
+    dados = []
+    for nome, simbolo in simbolos.items():
+        df = yf.download(simbolo, start=START_DATE, end=END_DATE, progress=False)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = ['_'.join(col).strip() for col in df.columns]
+        df = df.filter(regex=f'{simbolo}$')
+        df.rename(columns={
+            f'Open_{simbolo}': 'Open',
+            f'Close_{simbolo}': 'Close',
+            f'High_{simbolo}': 'High',
+            f'Low_{simbolo}': 'Low',
+            f'Volume_{simbolo}': 'Volume'
+        }, inplace=True)
+        df['Date'] = df.index
+        df['company'] = nome
+        dados.append(df.reset_index(drop=True))
+    return pd.concat(dados)
 
-all_companies_stock_data = get_stock_data(companies_and_symbols)
-all_companies_stock_data.reset_index(inplace=True)
-all_companies_stock_data.columns = [col.lower() for col in all_companies_stock_data.columns]
-print(all_companies_stock_data)
-#Stock Data Getting End
+# === COLETA DE DADOS ===
+hrefs = buscar_links_de_noticias(SEARCH_TERMS)
+df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
+dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
 
-#Dash Construction Start
-app.layout = html.Div(className="app_container", children=[  
+# === LAYOUT DASH ===
+app.layout = html.Div(className="app_container", children=[
     html.Div(className="graph_container", children=[
         dcc.Dropdown(
             className="dropdown_menu",
             id="ticker",
-            options=["PETR4", "C%26A", "WEG"],
-            value="PETR4",            
-        ),       
-        dcc.Graph(id="stock_graphs")]),        
+            options=[{"label": name, "value": name} for name in COMPANY_SYMBOLS],
+            value="PETR4"
+        ),
+        dcc.Graph(id="stock_graphs")
+    ]),
     html.Div(className="news_container", children=[
-        html.H1("News"),
-        html.Div(id='news_container')])       
+        html.H1("Notícias"),
+        html.Div(id='news_container')
+    ])
 ])
 
-@app.callback(
-    Output("stock_graphs", "figure"), 
-    Input("ticker", "value")
-)
+# === CALLBACKS ===
+@app.callback(Output("stock_graphs", "figure"), Input("ticker", "value"))
+def atualizar_grafico(empresa):
+    df = dados_acoes[dados_acoes["company"] == empresa]
+    fig = px.line(
+        df, x="Date", y="Open",
+        hover_data=["High", "Low", "Close"],
+        labels={"Open": "Abertura", "High": "Alta", "Low": "Baixa", "Close": "Fechamento"}
+    )
+    fig.update_layout(
+        template='plotly_dark',
+        plot_bgcolor='rgba(189, 194, 191)',
+        paper_bgcolor='rgba(189, 194, 191)',
+        yaxis_title=''
+    )
+    return fig
 
-def update_graph_output(value):
-    all_companies_filtered = all_companies_stock_data.loc[all_companies_stock_data["company"]==value,:]
-    graph=px.line(all_companies_filtered, x="date", y="open",
-                  hover_data={"high": ":.2f", "low": ":.2f", "close": ":.2f"},
-                  labels={"date": "", "high": "high:", "low": "low:", "open": "open:", "close": "close:"})    
-    graph.update_layout(
-            template='plotly_dark',
-            plot_bgcolor='rgba(189, 194, 191)',
-            paper_bgcolor='rgba(189, 194, 191)',
-        )
-    graph.update_yaxes(title_text='')
-    for trace in graph.data:
-        trace.hovertemplate = trace.hovertemplate.replace("=", "")
-    return graph
-
-
-@app.callback(
-    Output("news_container", "children"), 
-    Input("ticker", "value")
-)
-
-def update_news(value):
-    filtered_news = all_news_info_DF[all_news_info_DF['company'] == value].head(3)   
-    
-    news_elements = [
-        html.Div([            
-            html.P(section),
-            html.H2(children=html.A(href=href, children=title, target='_blank'))            
-        ]) for href, title, section in zip(filtered_news['href'], filtered_news['title'], filtered_news['section'])
+@app.callback(Output("news_container", "children"), Input("ticker", "value"))
+def atualizar_noticias(empresa):
+    noticias = df_noticias[df_noticias['company'] == empresa].head(3)
+    return [
+        html.Div([
+            html.P(noticia['section']),
+            html.H2(html.A(noticia['title'], href=noticia['href'], target='_blank'))
+        ]) for _, noticia in noticias.iterrows()
     ]
-    return news_elements
-#Dash Construction End
 
-if __name__=='__main__':
-    app.run_server(debug=True)
+# === RUN ===
+if __name__ == '__main__':
+    app.run(debug=True)
