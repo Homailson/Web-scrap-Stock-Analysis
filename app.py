@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -127,7 +128,7 @@ def atualizar_noticias(empresa):
     ]
 
 # === RUN ===
-server = app.server
-
 if __name__ == '__main__':
-    app.run(debug=True)
+    # Use PORT environment variable or default to 8050
+    port = int(os.environ.get("PORT", 8050))
+    app.run(debug=True, port=port, host='0.0.0.0')
