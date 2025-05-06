@@ -1,4 +1,3 @@
-import os
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -7,10 +6,6 @@ from dash import Dash, html, dcc, Input, Output
 import plotly.express as px
 import yfinance as yf
 from datetime import datetime, timedelta
-from cachetools import TTLCache, cached
-
-# Cache com 1 entrada e expiração após 3600 segundos (1 hora)
-cache_acoes = TTLCache(maxsize=1, ttl=3600)
 
 # === CONFIGURAÇÕES ===
 app = Dash(__name__, title='Dash Homailson')
@@ -27,6 +22,7 @@ END_DATE = datetime.now()
 
 # === WEB SCRAPING ===
 def buscar_links_de_noticias(termos):
+    """Busca links das páginas de notícias a partir dos termos de busca."""
     hrefs = []
     for termo in termos:
         soup = BeautifulSoup(requests.get(BASE_URL + termo).content, 'html.parser')
@@ -56,13 +52,13 @@ def extrair_dados_da_pagina(info):
     }
 
 def extrair_noticias_em_paralelo(hrefs):
+    """Usa threads para extrair várias páginas ao mesmo tempo."""
     with ThreadPoolExecutor() as executor:
         return list(executor.map(extrair_dados_da_pagina, hrefs))
 
 # === YFINANCE ===
-@cached(cache_acoes)
-def obter_dados_acoes_cached(simbolos_tupla):
-    simbolos = dict(simbolos_tupla)
+def obter_dados_acoes(simbolos):
+    """Busca dados históricos das ações das empresas fornecidas."""
     dados = []
     for nome, simbolo in simbolos.items():
         df = yf.download(simbolo, start=START_DATE, end=END_DATE, progress=False)
@@ -81,28 +77,10 @@ def obter_dados_acoes_cached(simbolos_tupla):
         dados.append(df.reset_index(drop=True))
     return pd.concat(dados)
 
-# === COLETA DE DADOS COM FALLBACK ===
-def carregar_dados():
-    # Notícias
-    try:
-        hrefs = buscar_links_de_noticias(SEARCH_TERMS)
-        df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
-        df_noticias.to_csv("noticias.csv", index=False)
-    except Exception as e:
-        print(f"Erro ao buscar notícias: {e}")
-        df_noticias = pd.read_csv("noticias.csv")
-
-    # Ações
-    try:
-        dados_acoes = obter_dados_acoes_cached(tuple(sorted(COMPANY_SYMBOLS.items())))
-        dados_acoes.to_csv("acoes.csv", index=False)
-    except Exception as e:
-        print(f"Erro ao obter dados das ações: {e}")
-        dados_acoes = pd.read_csv("acoes.csv")
-
-    return df_noticias, dados_acoes
-
-df_noticias, dados_acoes = carregar_dados()
+# === COLETA DE DADOS ===
+hrefs = buscar_links_de_noticias(SEARCH_TERMS)
+df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
+# dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
 
 # === LAYOUT DASH ===
 app.layout = html.Div(className="app_container", children=[
@@ -124,6 +102,7 @@ app.layout = html.Div(className="app_container", children=[
 # === CALLBACKS ===
 @app.callback(Output("stock_graphs", "figure"), Input("ticker", "value"))
 def atualizar_grafico(empresa):
+    dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
     df = dados_acoes[dados_acoes["company"] == empresa]
     fig = px.line(
         df, x="Date", y="Open",
