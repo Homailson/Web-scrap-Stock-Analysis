@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -80,12 +81,28 @@ def obter_dados_acoes_cached(simbolos_tupla):
         dados.append(df.reset_index(drop=True))
     return pd.concat(dados)
 
-# === COLETA DE DADOS ===
-hrefs = buscar_links_de_noticias(SEARCH_TERMS)
-df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
+# === COLETA DE DADOS COM FALLBACK ===
+def carregar_dados():
+    # Notícias
+    try:
+        hrefs = buscar_links_de_noticias(SEARCH_TERMS)
+        df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
+        df_noticias.to_csv("noticias.csv", index=False)
+    except Exception as e:
+        print(f"Erro ao buscar notícias: {e}")
+        df_noticias = pd.read_csv("noticias.csv")
 
-# Transformando COMPANY_SYMBOLS para tupla ordenada para cache
-dados_acoes = obter_dados_acoes_cached(tuple(sorted(COMPANY_SYMBOLS.items())))
+    # Ações
+    try:
+        dados_acoes = obter_dados_acoes_cached(tuple(sorted(COMPANY_SYMBOLS.items())))
+        dados_acoes.to_csv("acoes.csv", index=False)
+    except Exception as e:
+        print(f"Erro ao obter dados das ações: {e}")
+        dados_acoes = pd.read_csv("acoes.csv")
+
+    return df_noticias, dados_acoes
+
+df_noticias, dados_acoes = carregar_dados()
 
 # === LAYOUT DASH ===
 app.layout = html.Div(className="app_container", children=[
