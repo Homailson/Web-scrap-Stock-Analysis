@@ -6,6 +6,10 @@ from dash import Dash, html, dcc, Input, Output
 import plotly.express as px
 import yfinance as yf
 from datetime import datetime, timedelta
+from cachetools import TTLCache, cached
+
+# Cache com 1 entrada e expiração após 3600 segundos (1 hora)
+cache_acoes = TTLCache(maxsize=1, ttl=3600)
 
 # === CONFIGURAÇÕES ===
 app = Dash(__name__, title='Dash Homailson')
@@ -22,7 +26,6 @@ END_DATE = datetime.now()
 
 # === WEB SCRAPING ===
 def buscar_links_de_noticias(termos):
-    """Busca links das páginas de notícias a partir dos termos de busca."""
     hrefs = []
     for termo in termos:
         soup = BeautifulSoup(requests.get(BASE_URL + termo).content, 'html.parser')
@@ -52,13 +55,13 @@ def extrair_dados_da_pagina(info):
     }
 
 def extrair_noticias_em_paralelo(hrefs):
-    """Usa threads para extrair várias páginas ao mesmo tempo."""
     with ThreadPoolExecutor() as executor:
         return list(executor.map(extrair_dados_da_pagina, hrefs))
 
 # === YFINANCE ===
-def obter_dados_acoes(simbolos):
-    """Busca dados históricos das ações das empresas fornecidas."""
+@cached(cache_acoes)
+def obter_dados_acoes_cached(simbolos_tupla):
+    simbolos = dict(simbolos_tupla)
     dados = []
     for nome, simbolo in simbolos.items():
         df = yf.download(simbolo, start=START_DATE, end=END_DATE, progress=False)
@@ -80,7 +83,9 @@ def obter_dados_acoes(simbolos):
 # === COLETA DE DADOS ===
 hrefs = buscar_links_de_noticias(SEARCH_TERMS)
 df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
-dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
+
+# Transformando COMPANY_SYMBOLS para tupla ordenada para cache
+dados_acoes = obter_dados_acoes_cached(tuple(sorted(COMPANY_SYMBOLS.items())))
 
 # === LAYOUT DASH ===
 app.layout = html.Div(className="app_container", children=[
