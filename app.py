@@ -1,3 +1,4 @@
+import os
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
@@ -22,7 +23,6 @@ END_DATE = datetime.now()
 
 # === WEB SCRAPING ===
 def buscar_links_de_noticias(termos):
-    """Busca links das páginas de notícias a partir dos termos de busca."""
     hrefs = []
     for termo in termos:
         soup = BeautifulSoup(requests.get(BASE_URL + termo).content, 'html.parser')
@@ -52,35 +52,55 @@ def extrair_dados_da_pagina(info):
     }
 
 def extrair_noticias_em_paralelo(hrefs):
-    """Usa threads para extrair várias páginas ao mesmo tempo."""
     with ThreadPoolExecutor() as executor:
         return list(executor.map(extrair_dados_da_pagina, hrefs))
 
+def coletar_noticias():
+    try:
+        hrefs = buscar_links_de_noticias(SEARCH_TERMS)
+        noticias = extrair_noticias_em_paralelo(hrefs)
+        df = pd.DataFrame(noticias)
+        df.to_csv("noticias.csv", index=False)
+        return df
+    except Exception as e:
+        print(f"[AVISO] Falha ao coletar notícias: {e}")
+        if os.path.exists("noticias.csv"):
+            return pd.read_csv("noticias.csv")
+        return pd.DataFrame()
+
 # === YFINANCE ===
 def obter_dados_acoes(simbolos):
-    """Busca dados históricos das ações das empresas fornecidas."""
     dados = []
-    for nome, simbolo in simbolos.items():
-        df = yf.download(simbolo, start=START_DATE, end=END_DATE, progress=False)
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = ['_'.join(col).strip() for col in df.columns]
-        df = df.filter(regex=f'{simbolo}$')
-        df.rename(columns={
-            f'Open_{simbolo}': 'Open',
-            f'Close_{simbolo}': 'Close',
-            f'High_{simbolo}': 'High',
-            f'Low_{simbolo}': 'Low',
-            f'Volume_{simbolo}': 'Volume'
-        }, inplace=True)
-        df['Date'] = df.index
-        df['company'] = nome
-        dados.append(df.reset_index(drop=True))
-    return pd.concat(dados)
+    try:
+        for nome, simbolo in simbolos.items():
+            df = yf.download(simbolo, start=START_DATE, end=END_DATE, progress=False)
+            if df.empty:
+                continue
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = ['_'.join(col).strip() for col in df.columns]
+            df = df.filter(regex=f'{simbolo}$')
+            df.rename(columns={
+                f'Open_{simbolo}': 'Open',
+                f'Close_{simbolo}': 'Close',
+                f'High_{simbolo}': 'High',
+                f'Low_{simbolo}': 'Low',
+                f'Volume_{simbolo}': 'Volume'
+            }, inplace=True)
+            df['Date'] = df.index
+            df['company'] = nome
+            dados.append(df.reset_index(drop=True))
+        df_final = pd.concat(dados)
+        df_final.to_csv("acoes.csv", index=False)
+        return df_final
+    except Exception as e:
+        print(f"[AVISO] Falha ao obter dados de ações: {e}")
+        if os.path.exists("acoes.csv"):
+            return pd.read_csv("acoes.csv", parse_dates=['Date'])
+        return pd.DataFrame()
 
 # === COLETA DE DADOS ===
-hrefs = buscar_links_de_noticias(SEARCH_TERMS)
-df_noticias = pd.DataFrame(extrair_noticias_em_paralelo(hrefs))
-# dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
+df_noticias = coletar_noticias()
+dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
 
 # === LAYOUT DASH ===
 app.layout = html.Div(className="app_container", children=[
@@ -102,7 +122,6 @@ app.layout = html.Div(className="app_container", children=[
 # === CALLBACKS ===
 @app.callback(Output("stock_graphs", "figure"), Input("ticker", "value"))
 def atualizar_grafico(empresa):
-    dados_acoes = obter_dados_acoes(COMPANY_SYMBOLS)
     df = dados_acoes[dados_acoes["company"] == empresa]
     fig = px.line(
         df, x="Date", y="Open",
